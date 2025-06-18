@@ -15,6 +15,9 @@ from .configuration_tinyllava import TinyLlavaConfig
 from ..utils.constants import *
 # from tinyllava.utils.data_utils import get_value_from_kwargs
 
+from safetensors import safe_open
+import os
+
 def get_value_from_kwargs(kwargs, name):
     if name in kwargs:
         return kwargs.pop(name)
@@ -63,7 +66,7 @@ class TinyLlavaForConditionalGeneration(TinyLlavaPreTrainedModel):
         self.language_model = LLMFactory(config.llm_model_name_or_path)[0](config.text_config)
         self.vision_tower = VisionTowerFactory(config.vision_model_name_or_path)(config.vision_config)
         self.connector = ConnectorFactory(config.connector_type)(config)
-
+        
         (Tokenizer, post_load) = LLMFactory(config.llm_model_name_or_path)[1]
         self.tokenizer = post_load(Tokenizer.from_pretrained(
             config.tokenizer_name_or_path,
@@ -352,17 +355,36 @@ class TinyLlavaForConditionalGeneration(TinyLlavaPreTrainedModel):
     
     
     def load_llm(self, **kwargs):
-        language_model_name = get_value_from_kwargs(kwargs, 'model_name_or_path')
-        pretrained_llm_path = get_value_from_kwargs(kwargs, 'pretrained_llm_path')
-        if pretrained_llm_path is not None:
-            language_model_name = pretrained_llm_path
-        if language_model_name is not None:
-            self.language_model = self.language_model.from_pretrained(
-                language_model_name, **kwargs
-            )
-        print('loading language model from ', language_model_name)
-        self.language_model.requires_grad_(False)
-        
+        full_state_dict = get_value_from_kwargs(kwargs, 'full_state_dict')
+        if full_state_dict is not None:
+            print('Loading language model weights from provided checkpoint (full_state_dict)...')
+            llm_state_dict = {}
+            for k, v in full_state_dict.items():
+                if k.startswith('language_model.'):
+                    llm_state_dict[k[15:]] = v
+            
+            try:
+                self.language_model.load_state_dict(llm_state_dict, strict=False)
+                print("Language model weights loaded successfully from full_state_dict.")
+            except RuntimeError as e:
+                print(f"Error loading language model weights from full_state_dict: {e}")
+                # You might want to log this or raise a more specific error
+                raise e # Or handle gracefully, e.g., fall back to original loading if possible
+        else:
+            # Original LLM loading logic (e.g., from huggingface/local path)
+            language_model_name = get_value_from_kwargs(kwargs, 'model_name_or_path')
+            pretrained_llm_path = get_value_from_kwargs(kwargs, 'pretrained_llm_path')
+            if pretrained_llm_path is not None:
+                language_model_name = pretrained_llm_path
+            
+            if language_model_name is not None:
+                self.language_model = self.language_model.from_pretrained(
+                    language_model_name, **kwargs
+                )
+            print('loading language model from ', language_model_name)
+            
+        self.language_model.requires_grad_(False) # Freeze LLM weights for finetuning
+
         self.config.text_config.torch_dtype = kwargs.get('torch_dtype', None)
         self.config.pad_token = getattr(self.tokenizer, 'pad_token', None)
         self.config.pad_token_id = getattr(self.tokenizer, 'pad_token_id', None)
@@ -371,13 +393,99 @@ class TinyLlavaForConditionalGeneration(TinyLlavaPreTrainedModel):
         
         
     def load_vision_tower(self, **kwargs):
-        vision_tower_name = get_value_from_kwargs(kwargs, 'model_name_or_path')
-        self.vision_tower.load_model(vision_tower_name, **kwargs)
+        full_state_dict = get_value_from_kwargs(kwargs, 'full_state_dict')
+        
+        if full_state_dict is not None:
+            print('Loading vision tower weights from provided checkpoint (full_state_dict)...')
+            vision_tower_state_dict = {}
+            for k, v in full_state_dict.items():
+                if k.startswith('vision_tower.'):
+                    vision_tower_state_dict[k[13:]] = v
+            
+            try:
+                self.vision_tower.load_state_dict(vision_tower_state_dict, strict=True)
+                print("Vision tower weights loaded successfully from full_state_dict.")
+            except RuntimeError as e:
+                print(f"Error loading vision tower weights from full_state_dict: {e}")
+                raise e
+        else:
+            # Original Vision Tower loading logic
+            vision_tower_name = get_value_from_kwargs(kwargs, 'model_name_or_path')
+            self.vision_tower.load_model(vision_tower_name, **kwargs)
+            print('loading vision tower from ', vision_tower_name)
 
         
     def load_connector(self, **kwargs):
-        self.connector.load_model(**kwargs)
+        full_state_dict = get_value_from_kwargs(kwargs, 'full_state_dict')
+        if full_state_dict is not None:
+            print('Loading connector weights from provided checkpoint (full_state_dict)...')
+            connector_state_dict = {}
+            for k, v in full_state_dict.items():
+                if k.startswith('connector.'):
+                    connector_state_dict[k[10:]] = v
+            
+            try:
+                self.connector.load_state_dict(connector_state_dict, strict=True)
+                print("Connector weights loaded successfully from full_state_dict.")
+            except RuntimeError as e:
+                print(f"Error loading connector weights with strict=True from full_state_dict: {e}")
+                print("Attempting to load with strict=False.")
+                self.connector.load_state_dict(connector_state_dict, strict=False)
+                print("Connector weights loaded successfully with strict=False from full_state_dict.")
+        else:
+            # Original Connector loading logic
+            self.connector.load_model(**kwargs)
+            print('loading connector with existing logic')
+            
+            
+    @classmethod
+    def from_pretrained(cls, model_config: TinyLlavaConfig, **kwargs):
+        """
+        TinyLlavaForConditionalGeneration 모델을 사전 학습된 체크포인트에서 로드합니다.
+        config 객체를 직접 매개변수로 받으며, 'model.safetensors' 파일이 존재하는 경우 이를 우선적으로 사용합니다.
+        """
+        # config 객체를 이미 받았으므로, 여기서 다시 from_pretrained를 호출할 필요가 없습니다.
+        # model_config는 TinyLlavaConfig 인스턴스여야 합니다.
+        config = model_config 
+        model = cls(config) # __init__을 통해 LLM, Vision Tower, Connector 초기화
+        
+        pretrained_path = get_value_from_kwargs(kwargs, 'pretrained_model_path')
 
+        safetensors_path = None
+        if pretrained_path: # pretrained_path가 설정되어 있을 때만 safetensors를 찾습니다.
+            if os.path.isfile(pretrained_path) and pretrained_path.endswith('.safetensors'):
+                safetensors_path = pretrained_path
+            elif os.path.isdir(pretrained_path):
+                potential_safetensors_path = os.path.join(pretrained_path, 'model.safetensors')
+                if os.path.isfile(potential_safetensors_path):
+                    safetensors_path = potential_safetensors_path
+                    
+        if safetensors_path:
+            print(f"Found model.safetensors at {safetensors_path}. Loading all components from this checkpoint.")
+            full_state_dict = {}
+            with safe_open(safetensors_path, framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    full_state_dict[key] = f.get_tensor(key)
+            print("Full checkpoint loaded into memory.")
+
+            # kwargs에 full_state_dict를 추가하여 개별 load 함수로 전달합니다.
+            kwargs['full_state_dict'] = full_state_dict
+            
+            # 각 컴포넌트 로드 함수를 호출합니다.
+            model.load_llm(**kwargs)
+            model.load_vision_tower(**kwargs)
+            model.load_connector(**kwargs)
+            
+            print("All components (LLM, Vision Tower, Connector) loaded from model.safetensors successfully.")
+        else:
+            print(f"No model.safetensors found from provided config path. Proceeding with default loading behavior.")
+            # model.safetensors가 없을 때, 기존 load_llm 등의 else 블록이 실행되도록 개별 호출합니다.
+            # 이 kwargs에는 'full_state_dict'가 없으므로 기존 로딩 로직이 작동합니다.
+            model.load_llm(**kwargs)
+            model.load_vision_tower(**kwargs)
+            model.load_connector(**kwargs)
+
+        return model
             
 
         

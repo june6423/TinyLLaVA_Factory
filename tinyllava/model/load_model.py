@@ -34,7 +34,8 @@ def load_pretrained_model(model_name_or_path, load_type='hf', load_8bit=False, l
     else:
         kwargs['torch_dtype'] = torch.float16
     if model_name_or_path is not None and 'lora' not in model_name_or_path:
-        model = TinyLlavaForConditionalGeneration.from_pretrained(model_name_or_path,low_cpu_mem_usage=True)
+        model_config = TinyLlavaConfig.from_pretrained(model_name_or_path)
+        model = TinyLlavaForConditionalGeneration.from_pretrained(model_config,pretrained_model_path=model_name_or_path,low_cpu_mem_usage=True)
         
     elif model_name_or_path is not None and 'lora' in model_name_or_path:
         if os.path.exists(os.path.join(model_name_or_path, 'adapter_config.json')):

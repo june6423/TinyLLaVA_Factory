@@ -61,10 +61,12 @@ def train():
     model_args = training_recipe.add_args(model_args)
     model_config = TinyLlavaConfig()
     model_config.load_from_config(model_arguments)
-    model = TinyLlavaForConditionalGeneration(model_config)
+    model = TinyLlavaForConditionalGeneration.from_pretrained(model_config, pretrained_model_path=training_arguments.pretrained_model_path,**model_args)
     # load pretrained checkpoint
+    
     if training_arguments.pretrained_model_path is not None:
-        model = training_recipe.load(model, model_args)
+        pass
+        #model = training_recipe.load(model, model_args)
     else:
         model.load_llm(**model_args['llm'])
         model.load_vision_tower(**model_args['vision_tower'])
