@@ -62,8 +62,13 @@ def train():
     model_config = TinyLlavaConfig()
     model_config.load_from_config(model_arguments)
     model = TinyLlavaForConditionalGeneration.from_pretrained(model_config, pretrained_model_path=training_arguments.pretrained_model_path,**model_args)
-    # load pretrained checkpoint
     
+    # model, tokenizer, image_processor, context_len = load_pretrained_model(training_arguments.pretrained_model_path)
+    print("Student load success")
+    teacher, tokenizer, image_processor, context_len = load_pretrained_model(training_arguments.pretrained_teacher_path)
+    print("Teacher load success")
+    
+    # load pretrained checkpoint
     if training_arguments.pretrained_model_path is not None:
         pass
         #model = training_recipe.load(model, model_args)
@@ -84,6 +89,7 @@ def train():
     trainer = LLaVATrainer(model=model, #does not require model.to(device), huggingface/deepspeed does it for you?
                            tokenizer=tokenizer,
                            args=training_arguments,
+                           teacher_model = teacher,
                            **data_module)
     
     trainer.train()

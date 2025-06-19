@@ -77,6 +77,7 @@ class TrainingArguments(transformers.TrainingArguments):
     group_by_modality_length: bool = field(default=False)
     vision_tower_lr: Optional[float] = None
     pretrained_model_path: Optional[str] = field(default=None)
+    pretrained_teacher_path: Optional[str] = field(default=None)
     
     
     

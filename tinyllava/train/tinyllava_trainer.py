@@ -17,6 +17,9 @@ from typing import List, Optional
 
 from ..utils.train_utils import *
 
+import torch.nn.functional as F
+from torch.nn import CrossEntropyLoss
+
 
 def split_to_even_chunks(indices, lengths, num_chunks):
     """
@@ -118,7 +121,25 @@ class LengthGroupedSampler(Sampler):
 
 
 class LLaVATrainer(Trainer):
-
+    def __init__(self, *args, teacher_model=None, **kwargs):
+        # 부모 클래스인 LLaVATrainer의 __init__을 호출합니다.
+        # model, tokenizer, args, data_module 등은 kwargs로 전달됩니다.
+        super().__init__(*args, **kwargs) 
+        
+        self.temperature = 4
+        
+        # Teacher 모델이 존재하면 동결 및 eval 모드 설정
+        if teacher_model:
+            print("Setting Teacher model to evaluation mode and freezing parameters...")
+            # Teacher 모델을 평가 모드로 설정 (Dropout, BatchNorm 등이 비활성화됨)
+            teacher_model.eval() 
+            # 모든 Teacher 모델 파라미터의 그래디언트 계산을 비활성화
+            # 이렇게 하면 Teacher 모델은 학습 과정에서 업데이트되지 않습니다.
+            for param in teacher_model.parameters():
+                param.requires_grad = False 
+            print("Teacher model successfully frozen.")
+        self.teacher_model = teacher_model
+            
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None
@@ -225,7 +246,43 @@ class LLaVATrainer(Trainer):
                 logger.info(f"skipped: {skipped/2**20}M params")
 
         return self.optimizer
+    
+    def compute_loss(self, model, inputs, return_outputs=False):
+        
+        if self.teacher_model is not None and not hasattr(self, '_teacher_model_on_gpu'):
+            # _teacher_model_on_gpu 플래그로 한 번만 실행되도록 보장
+            print("--- Placing Teacher Model on GPU for the first time ---")
+            target_device = model.device 
+            current_teacher_device = next(self.teacher_model.parameters()).device
 
+            if current_teacher_device != target_device:
+                self.teacher_model = self.teacher_model.to(target_device)
+                print(f"Teacher model successfully moved to {self.teacher_model.device}.")
+            else:
+                print("Teacher model is already on the same device as the Student model.")
+            
+            self._teacher_model_on_gpu = True # 플래그 설정
+        
+        breakpoint()
+        labels = inputs.get("labels")
+        student_outputs = model(**inputs)
+        
+        supervised_loss = student_outputs.loss
+        if supervised_loss is None:
+                raise ValueError("Student model outputs.loss is None and no labels are provided for supervised loss calculation.")
+        
+        if self.teacher_model:
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(**inputs)
+            teacher_logits = teacher_outputs.logits
+            student_logits = student_outputs.logits
+            shift_teacher_logits = teacher_logits[..., :-1, :].contiguous()
+            
+            distillation_loss = 0.0
 
-
-
+            total_loss = 0.7 * distillation_loss + 0.3 * supervised_loss
+            
+        else:
+            total_loss = supervised_loss
+            
+        return (total_loss, student_outputs) if return_outputs else total_loss

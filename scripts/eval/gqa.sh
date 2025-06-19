@@ -13,8 +13,8 @@ GQADIR="/data1/dongjun/eval_dataset/gqa"
 #MODEL_NAME="tiny-llava-phi-2-siglip-so400m-patch14-384-base-finetune"
 #EVAL_DIR="/home/ai/data/llava/dataset/eval"
 
-MODEL_PATH="/workspace/TinyLLaVA_Factory/pretrained_ckpt/TinyLLaVA-Qwen2-0.5B-SigLIP"
-MODEL_NAME="TinyLLaVA-Qwen2-0.5B-SigLIP"
+MODEL_PATH="/workspace/TinyLLaVA_Factory/pretrained_ckpt/TinyLLaVA-Qwen2.5-3B-SigLIP"
+MODEL_NAME="TinyLLaVA-Qwen2.5-3B-SigLIP"
 EVAL_DIR="/data1/dongjun/eval_dataset"
 
 for IDX in $(seq 0 $((CHUNKS-1))); do

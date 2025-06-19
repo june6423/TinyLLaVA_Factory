@@ -15,8 +15,10 @@ from .configuration_tinyllava import TinyLlavaConfig
 from ..utils.constants import *
 # from tinyllava.utils.data_utils import get_value_from_kwargs
 
-from safetensors import safe_open
+#from safetensors import safe_open
+from safetensors.torch import load_file
 import os
+import json
 
 def get_value_from_kwargs(kwargs, name):
     if name in kwargs:
@@ -348,11 +350,8 @@ class TinyLlavaForConditionalGeneration(TinyLlavaPreTrainedModel):
 
         if _position_ids is None:
             position_ids = None
-
         return None, position_ids, attention_mask, past_key_values, new_input_embeds, new_labels
-    
-
-    
+      
     
     def load_llm(self, **kwargs):
         full_state_dict = get_value_from_kwargs(kwargs, 'full_state_dict')
@@ -450,24 +449,54 @@ class TinyLlavaForConditionalGeneration(TinyLlavaPreTrainedModel):
         model = cls(config) # __init__을 통해 LLM, Vision Tower, Connector 초기화
         
         pretrained_path = get_value_from_kwargs(kwargs, 'pretrained_model_path')
+        
+        if os.path.isfile(pretrained_path) and pretrained_path.endswith('.safetensors'):
+            print(f"Found safetensors file at {pretrained_path}. Loading checkpoint.")
+            full_state_dict = load_file(pretrained_path)
 
-        safetensors_path = None
-        if pretrained_path: # pretrained_path가 설정되어 있을 때만 safetensors를 찾습니다.
-            if os.path.isfile(pretrained_path) and pretrained_path.endswith('.safetensors'):
-                safetensors_path = pretrained_path
-            elif os.path.isdir(pretrained_path):
-                potential_safetensors_path = os.path.join(pretrained_path, 'model.safetensors')
-                if os.path.isfile(potential_safetensors_path):
-                    safetensors_path = potential_safetensors_path
+        # Case 2: 디렉토리인 경우
+        elif os.path.isdir(pretrained_path):
+            # model.safetensors가 있는지 확인
+            single_file = os.path.join(pretrained_path, "model.safetensors")
+            index_file = os.path.join(pretrained_path, "model.safetensors.index.json")
+
+            if os.path.isfile(single_file):
+                print(f"Found model.safetensors at {single_file}. Loading checkpoint.")
+                full_state_dict = load_file(single_file)
+
+            elif os.path.isfile(index_file):
+                print(f"Found safetensors index at {index_file}. Loading split checkpoint from directory.")
                     
-        if safetensors_path:
-            print(f"Found model.safetensors at {safetensors_path}. Loading all components from this checkpoint.")
-            full_state_dict = {}
-            with safe_open(safetensors_path, framework="pt", device="cpu") as f:
-                for key in f.keys():
-                    full_state_dict[key] = f.get_tensor(key)
-            print("Full checkpoint loaded into memory.")
+                full_state_dict = {}
+                with open(index_file, 'r') as f:
+                    index_data = json.load(f)
 
+                # index.json에 있는 weight_map을 사용하여 각 파일에서 텐서 로드
+                # weight_map은 각 텐서가 어느 파일에 있는지 매핑 정보를 포함
+                if 'weight_map' in index_data:
+                    # 파일 경로를 키로, 해당 파일에 속하는 텐서들의 리스트를 값으로 하는 딕셔너리
+                    files_to_load = {}
+                    for tensor_name, file_name in index_data['weight_map'].items():
+                        if file_name not in files_to_load:
+                            files_to_load[file_name] = []
+                        files_to_load[file_name].append(tensor_name)
+
+                    for file_name, tensor_names in files_to_load.items():
+                        file_path = os.path.join(pretrained_path, file_name)
+                        if not os.path.isfile(file_path):
+                            print(f"Warning: Expected safetensors file {file_path} not found.")
+                            continue
+
+                        print(f"Loading part from {file_path}")
+                        part_state_dict = load_file(file_path)
+                        
+                        for tensor_name in tensor_names:
+                            if tensor_name in part_state_dict:
+                                full_state_dict[tensor_name] = part_state_dict[tensor_name]
+                            else:
+                                print(f"Warning: Tensor {tensor_name} not found in {file_path}")
+
+        if full_state_dict is not None:
             # kwargs에 full_state_dict를 추가하여 개별 load 함수로 전달합니다.
             kwargs['full_state_dict'] = full_state_dict
             
