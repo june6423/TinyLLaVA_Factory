@@ -276,11 +276,17 @@ class LLaVATrainer(Trainer):
                 teacher_outputs = self.teacher_model(**inputs)
             teacher_logits = teacher_outputs.logits
             student_logits = student_outputs.logits
-            shift_teacher_logits = teacher_logits[..., :-1, :].contiguous()
             
-            distillation_loss = 0.0
+            shift_teacher_logits = teacher_logits[..., :-1, :].contiguous()
+            shift_student_logits = student_logits[..., :-1, :].contiguous()
+            
+            student_log_probs = F.log_softmax(shift_student_logits / self.temperature, dim=-1)
+            teacher_probs = F.softmax(shift_teacher_logits / self.temperature, dim=-1)
 
-            total_loss = 0.7 * distillation_loss + 0.3 * supervised_loss
+            kl_loss_per_token = F.kl_div(student_log_probs, teacher_probs, reduction='none').sum(dim=-1)
+            distillation_loss = kl_loss_per_token.mean()
+
+            total_loss = 0.9 * distillation_loss + 0.1 * supervised_loss
             
         else:
             total_loss = supervised_loss
